@@ -91,80 +91,109 @@ if not st.session_state['logged_in']:
                     st.error("用户名已存在。")
 
 # --- 登录后的预测大厅 ---
+# --- 登录后的内部系统 ---
 else:
     st.sidebar.title(f"👤 {st.session_state['username']}")
+
+    # 🌟 新增魔法：侧边栏导航菜单
+    menu = st.sidebar.radio("导航菜单", ["🏆 预测大厅", "📊 积分群雄榜"])
+
     if st.sidebar.button("退出登录"):
         st.session_state['logged_in'] = False
         st.session_state['username'] = ''
         st.rerun()
 
-    st.title("🏆 英超第32轮预测大厅")
-    st.write("⚠️ **注意规则：** 每场比赛开球前 **30分钟** 停止预测提交！")
+    # ==========================================
+    # 页面一：预测大厅 (保留你之前的心血)
+    # ==========================================
+    if menu == "🏆 预测大厅":
+        st.title("🏆 英超第32轮预测大厅")
+        st.write("⚠️ **注意规则：** 每场比赛开球前 **30分钟** 停止预测提交！")
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
+        conn = get_db_connection()
+        cursor = conn.cursor()
 
-    # 1. 获取当前用户的专属 ID
-    cursor.execute("SELECT id FROM Users WHERE username=%s", (st.session_state['username'],))
-    user_id = cursor.fetchone()[0]
+        cursor.execute("SELECT id FROM Users WHERE username=%s", (st.session_state['username'],))
+        user_id = cursor.fetchone()[0]
 
-    # 2. 获取该用户已经提交过的预测（方便他们修改）
-    cursor.execute("SELECT match_id, predicted_home, predicted_away FROM Predictions WHERE user_id=%s", (user_id,))
-    user_preds = {row[0]: (row[1], row[2]) for row in cursor.fetchall()}
+        cursor.execute("SELECT match_id, predicted_home, predicted_away FROM Predictions WHERE user_id=%s", (user_id,))
+        user_preds = {row[0]: (row[1], row[2]) for row in cursor.fetchall()}
 
-    # 3. 获取所有未开赛的比赛
-    cursor.execute(
-        "SELECT id, home_team, away_team, kickoff_time FROM Matches WHERE status='未开赛' ORDER BY kickoff_time")
-    matches = cursor.fetchall()
+        cursor.execute(
+            "SELECT id, home_team, away_team, kickoff_time FROM Matches WHERE status='未开赛' ORDER BY kickoff_time")
+        matches = cursor.fetchall()
 
-    current_time = get_beijing_time()
+        current_time = get_beijing_time()
 
-    # 4. 循环生成每一场比赛的预测卡片
-    for match in matches:
-        match_id, home, away, kickoff = match
+        for match in matches:
+            match_id, home, away, kickoff = match
+            deadline = kickoff - timedelta(minutes=30)
+            is_locked = current_time > deadline
 
-        # 计算是否已经过了提交截止时间（开球前30分钟）
-        deadline = kickoff - timedelta(minutes=30)
-        is_locked = current_time > deadline
+            with st.container(border=True):
+                st.subheader(f"{home} ⚔️ {away}")
 
-        # 用漂亮的卡片样式框起来
-        with st.container(border=True):
-            st.subheader(f"{home} ⚔️ {away}")
+                if is_locked:
+                    st.error(f"🔒 预测已关闭 (开球时间: {kickoff.strftime('%Y-%m-%d %H:%M')})")
+                else:
+                    st.caption(
+                        f"🕒 截止时间: {deadline.strftime('%Y-%m-%d %H:%M')} (当前: {current_time.strftime('%H:%M')})")
 
-            if is_locked:
-                st.error(f"🔒 预测已关闭 (开球时间: {kickoff.strftime('%Y-%m-%d %H:%M')})")
-            else:
-                st.caption(
-                    f"🕒 截止时间: {deadline.strftime('%Y-%m-%d %H:%M')} (当前: {current_time.strftime('%H:%M')})")
+                default_h, default_a = user_preds.get(match_id, (0, 0))
 
-            # 读取历史预测作为默认值
-            default_h, default_a = user_preds.get(match_id, (0, 0))
+                col1, col2, col3 = st.columns([1, 1, 1])
+                with col1:
+                    pred_h = st.number_input(f"{home} 进球", min_value=0, max_value=20, step=1, value=default_h,
+                                             key=f"h_{match_id}", disabled=is_locked)
+                with col2:
+                    pred_a = st.number_input(f"{away} 进球", min_value=0, max_value=20, step=1, value=default_a,
+                                             key=f"a_{match_id}", disabled=is_locked)
+                with col3:
+                    st.write("")
+                    st.write("")
+                    if not is_locked:
+                        if st.button("提交 / 修改", key=f"btn_{match_id}", use_container_width=True):
+                            if match_id in user_preds:
+                                cursor.execute(
+                                    "UPDATE Predictions SET predicted_home=%s, predicted_away=%s, submit_time=CURRENT_TIMESTAMP WHERE user_id=%s AND match_id=%s",
+                                    (pred_h, pred_a, user_id, match_id))
+                            else:
+                                cursor.execute(
+                                    "INSERT INTO Predictions (user_id, match_id, predicted_home, predicted_away) VALUES (%s, %s, %s, %s)",
+                                    (user_id, match_id, pred_h, pred_a))
+                            conn.commit()
+                            st.success("保存成功！")
+                            st.rerun()
 
-            col1, col2, col3 = st.columns([1, 1, 1])
-            with col1:
-                # 如果锁定，输入框就变成禁用状态 (disabled)
-                pred_h = st.number_input(f"{home} 进球", min_value=0, max_value=20, step=1, value=default_h,
-                                         key=f"h_{match_id}", disabled=is_locked)
-            with col2:
-                pred_a = st.number_input(f"{away} 进球", min_value=0, max_value=20, step=1, value=default_a,
-                                         key=f"a_{match_id}", disabled=is_locked)
-            with col3:
-                st.write("")  # 占个位让按钮往下靠一点
-                st.write("")
-                if not is_locked:
-                    if st.button("提交 / 修改", key=f"btn_{match_id}", use_container_width=True):
-                        # 检查是新建预测还是修改老预测
-                        if match_id in user_preds:
-                            cursor.execute(
-                                "UPDATE Predictions SET predicted_home=%s, predicted_away=%s, submit_time=CURRENT_TIMESTAMP WHERE user_id=%s AND match_id=%s",
-                                (pred_h, pred_a, user_id, match_id))
-                        else:
-                            cursor.execute(
-                                "INSERT INTO Predictions (user_id, match_id, predicted_home, predicted_away) VALUES (%s, %s, %s, %s)",
-                                (user_id, match_id, pred_h, pred_a))
-                        conn.commit()
-                        st.success("保存成功！")
-                        st.rerun()  # 刷新页面显示最新状态
+        cursor.close()
+        conn.close()
 
-    cursor.close()
-    conn.close()
+    # ==========================================
+    # 页面二：全新打造的积分排行榜
+    # ==========================================
+    elif menu == "📊 积分群雄榜":
+        st.title("📊 赛季总积分榜")
+        st.write("看看谁才是真正的英超懂球帝！")
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # 从数据库中按总积分从高到低抓取所有用户
+        cursor.execute("SELECT username, total_points FROM Users ORDER BY total_points DESC")
+        results = cursor.fetchall()
+        conn.close()
+
+        # 将数据整理成 Streamlit 喜欢的表格格式
+        leaderboard_data = []
+        for index, row in enumerate(results):
+            # 如果是前三名，给个特别的奖牌图标
+            rank_icon = "🥇" if index == 0 else "🥈" if index == 1 else "🥉" if index == 2 else f"{index + 1}"
+
+            leaderboard_data.append({
+                "排名": rank_icon,
+                "球迷 ID": row[0],
+                "👑 累计总积分": row[1]
+            })
+
+        # 召唤数据大屏！
+        st.dataframe(leaderboard_data, use_container_width=True, hide_index=True)
