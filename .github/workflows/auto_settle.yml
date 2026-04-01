@@ -1,0 +1,30 @@
+name: 自动结算机器人
+
+on:
+  schedule:
+    # 每天每隔 6 小时自动运行一次 (你可以根据比赛频率调整)
+    - cron: '0 */6 * * *'
+  workflow_dispatch: # 允许你随时在 GitHub 网页上手动点击运行
+
+jobs:
+  settle:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v3
+
+      - name: 设置 Python 环境
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: 安装依赖
+        run: |
+          pip install requests psycopg2-binary streamlit
+
+      - name: 执行全自动结算
+        env:
+          # 从 GitHub Secrets 中读取敏感钥匙
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          FOOTBALL_API_KEY: ${{ secrets.FOOTBALL_API_KEY }}
+        run: python settle_matches.py
